@@ -38,6 +38,19 @@ Run the fixed two-batch overfit check before a long training run. The trainer us
 
 Evaluation saves each method's enhanced `.wav`, plus `.npz` arrays for per-frame gains, estimated noise PSD, runtime seconds, and real-time factor. The reconstructed baseline also saves each FIR coefficient vector. `metrics.json` contains one record per mixture and method; `summary.json` contains per-method means, sample standard deviations, seeded bootstrap 95% confidence intervals, and paired two-sided Wilcoxon signed-rank comparisons of UA-HSN with each baseline. Pairing uses `mixture_id`. Spectral subtraction uses configurable `--oversubtraction`; the reconstructed baseline accepts `--linear-phase-filter-length` and `--linear-phase-frame-length`. These are measurement implementations, not claims of quality. A trained checkpoint requires real paired data; no dataset is bundled or downloaded.
 
+## Final experiment runner
+
+```bash
+python scripts/run_experiments.py \
+    --test-manifest data/test.csv \
+    --checkpoint checkpoints/best.pt \
+    --output results
+```
+
+The runner evaluates noisy, spectral subtraction, Wiener, reconstructed linear-phase, and UA-HSN at −5, 0, 5, 10, and 15 dB. It writes `per_utterance.csv`, Tables 1–3, 5–7 as CSV, and `summary.md`, plus enhanced WAV files under `audio/` and gains/PSD under `gains/`. Table 6 groups **enhanced SI-SDR minus noisy SI-SDR** by noise type at 5 dB. Unavailable values are written as `NaN` and explained in `summary.md` and stderr warnings.
+
+The benchmark warms up each method, then measures three enhancement repeats by default (`--benchmark-repeats`). Frame statistics come from timed per-frame processing; RTF covers full enhancement including STFT and reconstruction. CUDA timing synchronizes before and after calls. `thop` profiles UA-HSN network MACs, while a weight-matrix calculation provides an analytic network estimate; classical NumPy methods have `NaN` MACs because `thop` cannot profile them. The 60,289 UA-HSN parameters are counted from the model tensors. Latency is reported as one input hop for STFT methods, plus the FIR group delay for the reconstructed baseline. These definitions and each computed value appear in `summary.md`.
+
 ## Evaluation definitions
 
 - Reference metrics: zero-mean SI-SDR via projection onto the clean reference; segmental SNR on 320-sample frames with 160-sample hop, clipped per frame to `[−10,35]` dB; classical [pystoi STOI](https://github.com/mpariente/pystoi); and 16 kHz wideband [PESQ](https://github.com/ludlows/PESQ). STOI and PESQ are recorded as `null` when a clip is too short or unsupported.

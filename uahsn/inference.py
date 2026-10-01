@@ -34,10 +34,14 @@ class UAHSNEnhancer:
     def __init__(
         self, model: UAHSN, sigma0: float, config: Config = Config(),
         feature_mean: np.ndarray | None = None, feature_std: np.ndarray | None = None,
+        device: str = "cpu",
     ) -> None:
         if not np.isfinite(sigma0) or sigma0 <= 0:
             raise ValueError("sigma0 must be the positive validation median standard deviation")
-        self.model = model.cpu().eval()
+        if device.startswith("cuda") and not torch.cuda.is_available():
+            raise ValueError("CUDA was requested but is unavailable")
+        self.device = torch.device(device)
+        self.model = model.to(self.device).eval()
         self.sigma0 = float(sigma0)
         self.config = config
         self.bands = Bands(config)
@@ -47,12 +51,14 @@ class UAHSNEnhancer:
             raise ValueError("Feature normalization needs 96 means and positive standard deviations")
 
     @classmethod
-    def from_checkpoint(cls, path: str | Path, config: Config = Config()) -> "UAHSNEnhancer":
+    def from_checkpoint(
+        cls, path: str | Path, config: Config = Config(), device: str = "cpu",
+    ) -> "UAHSNEnhancer":
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         model = UAHSN()
         model.load_state_dict(checkpoint["model"])
         return cls(model, checkpoint["sigma0"], config,
-                   checkpoint.get("feature_mean"), checkpoint.get("feature_std"))
+                   checkpoint.get("feature_mean"), checkpoint.get("feature_std"), device)
 
     def enhance(self, audio: np.ndarray) -> EnhancementResult:
         start = perf_counter()
@@ -61,17 +67,25 @@ class UAHSNEnhancer:
         predicted_gains = []
         standard_deviations = []
         noise_psds = []
+        frame_times = []
         state = None
         with torch.no_grad():
             for spectrum in spectra:
+                if self.device.type == "cuda":
+                    torch.cuda.synchronize(self.device)
+                tick = perf_counter()
                 feature, noise_psd, _, _ = extractor.update(spectrum)
                 noise_psds.append(noise_psd)
                 normalized = (feature - self.feature_mean) / self.feature_std
-                gain, log_variance, state = self.model(torch.from_numpy(normalized)[None, None], state)
-                predicted = gain[0, 0].numpy()
-                sigma = np.exp(0.5 * np.clip(log_variance[0, 0].numpy(), -40, 40))
+                tensor = torch.from_numpy(normalized)[None, None].to(self.device)
+                gain, log_variance, state = self.model(tensor, state)
+                if self.device.type == "cuda":
+                    torch.cuda.synchronize(self.device)
+                predicted = gain[0, 0].detach().cpu().numpy()
+                sigma = np.exp(0.5 * np.clip(log_variance[0, 0].detach().cpu().numpy(), -40, 40))
                 predicted_gains.append(predicted)
                 standard_deviations.append(sigma)
+                frame_times.append((perf_counter() - tick) * 1000)
         std_array = np.asarray(standard_deviations)
         band_gains = smooth_band_gains(np.asarray(predicted_gains), std_array, self.sigma0, self.config)
         gains_array = np.maximum(self.config.gain_floor, self.bands.interpolate(band_gains))
@@ -81,5 +95,6 @@ class UAHSNEnhancer:
             np.asarray(noise_psds),
             band_gains=band_gains,
             standard_deviation=std_array,
+            frame_times_ms=np.asarray(frame_times),
         )
         return finish_result(result, len(audio), self.config, start)

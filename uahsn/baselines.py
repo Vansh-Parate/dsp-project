@@ -22,6 +22,7 @@ class EnhancementResult:
     fir_coefficients: np.ndarray | None = None
     runtime_seconds: float = 0.0
     real_time_factor: float = 0.0
+    frame_times_ms: np.ndarray | None = None
 
 
 def finish_result(result: EnhancementResult, samples: int, config: Config, start: float) -> EnhancementResult:
@@ -56,8 +57,14 @@ class Noisy:
         start = perf_counter()
         frames = stft(audio, self.config)
         estimator = MinimumStatistics(self.config)
-        psd = np.asarray([estimator.update(np.abs(frame) ** 2) for frame in frames])
-        result = EnhancementResult(np.asarray(audio, dtype=np.float32).copy(), np.ones_like(frames.real), psd)
+        psds, times = [], []
+        for frame in frames:
+            tick = perf_counter()
+            psds.append(estimator.update(np.abs(frame) ** 2))
+            times.append((perf_counter() - tick) * 1000)
+        result = EnhancementResult(np.asarray(audio, dtype=np.float32).copy(),
+                                   np.ones_like(frames.real), np.asarray(psds),
+                                   frame_times_ms=np.asarray(times))
         return finish_result(result, len(audio), self.config, start)
 
 
@@ -74,14 +81,16 @@ class SpectralSubtraction:
         start = perf_counter()
         spectra = stft(audio, self.config)
         estimator = MinimumStatistics(self.config)
-        gains, psds = [], []
+        gains, psds, times = [], [], []
         for spectrum in spectra:
+            tick = perf_counter()
             psd = estimator.update(np.abs(spectrum) ** 2)
             psds.append(psd)
             gains.append(spectral_subtraction_gain(spectrum, psd, self.oversubtraction, self.config))
+            times.append((perf_counter() - tick) * 1000)
         gain_matrix = np.asarray(gains)
         result = EnhancementResult(istft(spectra * gain_matrix, len(audio), self.config),
-                                   gain_matrix, np.asarray(psds))
+                                   gain_matrix, np.asarray(psds), frame_times_ms=np.asarray(times))
         return finish_result(result, len(audio), self.config, start)
 
 
@@ -95,14 +104,16 @@ class DecisionDirectedWiener:
         start = perf_counter()
         spectra = stft(audio, self.config)
         extractor = FeatureExtractor(self.config)
-        gains, psds = [], []
+        gains, psds, times = [], [], []
         for spectrum in spectra:
+            tick = perf_counter()
             _, psd, _, wiener = extractor.update(spectrum)
             psds.append(psd)
             gains.append(wiener)
+            times.append((perf_counter() - tick) * 1000)
         gain_matrix = np.asarray(gains)
         result = EnhancementResult(istft(spectra * gain_matrix, len(audio), self.config),
-                                   gain_matrix, np.asarray(psds))
+                                   gain_matrix, np.asarray(psds), frame_times_ms=np.asarray(times))
         return finish_result(result, len(audio), self.config, start)
 
 
@@ -125,7 +136,10 @@ def symmetric_fir_from_gain(gain: np.ndarray, taps: int, n_fft: int) -> np.ndarr
     return coefficients
 
 
-def overlap_add_fir_blocks(audio: np.ndarray, coefficients: np.ndarray, hop: int) -> np.ndarray:
+def overlap_add_fir_blocks(
+    audio: np.ndarray, coefficients: np.ndarray, hop: int,
+    block_times_ms: list[float] | None = None,
+) -> np.ndarray:
     """Apply one causal FIR per input hop using FFT overlap-add."""
     samples = len(audio)
     n_blocks = int(np.ceil(samples / hop))
@@ -136,11 +150,14 @@ def overlap_add_fir_blocks(audio: np.ndarray, coefficients: np.ndarray, hop: int
     padded = np.pad(np.asarray(audio, dtype=np.float64), (0, n_blocks * hop - samples))
     output = np.zeros(n_blocks * hop + taps - 1, dtype=np.float64)
     for m in range(n_blocks):
+        tick = perf_counter()
         block = padded[m * hop:(m + 1) * hop]
         convolution = np.fft.irfft(
             np.fft.rfft(block, n=fft_size) * np.fft.rfft(coefficients[m], n=fft_size), n=fft_size,
         )[:hop + taps - 1]
         output[m * hop:m * hop + len(convolution)] += convolution
+        if block_times_ms is not None:
+            block_times_ms.append((perf_counter() - tick) * 1000)
     return output[:samples].astype(np.float32)
 
 
@@ -172,18 +189,24 @@ class ReconstructedLinearPhaseBaseline:
         spectra = stft(audio, self.config)
         estimator = MinimumStatistics(self.config)
         hop = self.config.hop_length
-        responses, coefficients_by_frame, psds = [], [], []
+        responses, coefficients_by_frame, psds, times = [], [], [], []
         for spectrum in spectra:
+            tick = perf_counter()
             psd = estimator.update(np.abs(spectrum) ** 2)
             psds.append(psd)
             target = spectral_subtraction_gain(spectrum, psd, self.oversubtraction, self.config)
             coefficients = symmetric_fir_from_gain(target, self.taps, self.config.n_fft)
             coefficients_by_frame.append(coefficients)
             responses.append(np.abs(np.fft.rfft(coefficients, n=self.config.n_fft)))
+            times.append((perf_counter() - tick) * 1000)
         coefficients_array = np.asarray(coefficients_by_frame)
-        output = overlap_add_fir_blocks(audio, coefficients_array, hop)
+        block_times: list[float] = []
+        output = overlap_add_fir_blocks(audio, coefficients_array, hop, block_times)
+        times[:len(block_times)] = (np.asarray(times[:len(block_times)])
+                                   + np.asarray(block_times)).tolist()
         result = EnhancementResult(output, np.asarray(responses),
-                                   np.asarray(psds), fir_coefficients=coefficients_array)
+                                   np.asarray(psds), fir_coefficients=coefficients_array,
+                                   frame_times_ms=np.asarray(times))
         return finish_result(result, len(audio), self.config, start)
 
 
