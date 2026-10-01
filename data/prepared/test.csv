@@ -1,0 +1,6 @@
+mixture_id,clean_path,noise_path,mixture_path,speaker,noise_type,snr_db,split,seed
+test_000002_-05db,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_-05db_clean.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000001.wav,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_-05db.wav,p241,babble,-5,test,2334851559
+test_000002_+00db,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+00db_clean.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000001.wav,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+00db.wav,p241,babble,0,test,4016105479
+test_000002_+05db,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+05db_clean.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000000.wav,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+05db.wav,p241,air_conditioner,5,test,3504064333
+test_000002_+10db,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+10db_clean.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000001.wav,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+10db.wav,p241,babble,10,test,11761768
+test_000002_+15db,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+15db_clean.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000000.wav,/mnt/c/Dev/uahsn/data/prepared/mixtures/test/test_000002_+15db.wav,p241,air_conditioner,15,test,3682523327

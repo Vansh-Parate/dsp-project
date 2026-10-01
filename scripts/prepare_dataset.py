@@ -73,8 +73,10 @@ def prepare_dataset(
     if not 0 < validation_fraction < 1 or not 0 < test_fraction < 1:
         raise ValueError("Validation and test fractions must be between zero and one")
     clean_dir, noise_dir, output_dir = clean_dir.resolve(), noise_dir.resolve(), output_dir.resolve()
-    if not clean_dir.is_dir() or not noise_dir.is_dir():
-        raise ValueError("Clean and noise directories must exist")
+    missing = [str(path) for path in (clean_dir, noise_dir) if not path.is_dir()]
+    if missing:
+        raise ValueError("Input directory not found: " + ", ".join(missing)
+                         + ". Supply existing WAV folders with --clean-dir and --noise-dir.")
     if output_dir.is_relative_to(clean_dir) or output_dir.is_relative_to(noise_dir):
         raise ValueError("Output directory must be outside the source directories")
     pattern = re.compile(speaker_regex) if speaker_regex else None

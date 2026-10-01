@@ -1,0 +1,2 @@
+mixture_id,clean_path,noise_path,mixture_path,speaker,noise_type,snr_db,split,seed
+train_000001_dynamic,/mnt/c/Dev/uahsn/data/prepared/audio/clean/000001.wav,/mnt/c/Dev/uahsn/data/prepared/audio/noise/000001.wav,,p237,babble,,train,3133163871
