@@ -125,6 +125,25 @@ def symmetric_fir_from_gain(gain: np.ndarray, taps: int, n_fft: int) -> np.ndarr
     return coefficients
 
 
+def overlap_add_fir_blocks(audio: np.ndarray, coefficients: np.ndarray, hop: int) -> np.ndarray:
+    """Apply one causal FIR per input hop using FFT overlap-add."""
+    samples = len(audio)
+    n_blocks = int(np.ceil(samples / hop))
+    if coefficients.ndim != 2 or len(coefficients) < n_blocks:
+        raise ValueError("Expected one FIR coefficient vector per input block")
+    taps = coefficients.shape[1]
+    fft_size = 1 << (hop + taps - 2).bit_length()
+    padded = np.pad(np.asarray(audio, dtype=np.float64), (0, n_blocks * hop - samples))
+    output = np.zeros(n_blocks * hop + taps - 1, dtype=np.float64)
+    for m in range(n_blocks):
+        block = padded[m * hop:(m + 1) * hop]
+        convolution = np.fft.irfft(
+            np.fft.rfft(block, n=fft_size) * np.fft.rfft(coefficients[m], n=fft_size), n=fft_size,
+        )[:hop + taps - 1]
+        output[m * hop:m * hop + len(convolution)] += convolution
+    return output[:samples].astype(np.float32)
+
+
 class ReconstructedLinearPhaseBaseline:
     """Reconstruction from a prose method description, not an exact paper reproduction.
 
@@ -153,27 +172,18 @@ class ReconstructedLinearPhaseBaseline:
         spectra = stft(audio, self.config)
         estimator = MinimumStatistics(self.config)
         hop = self.config.hop_length
-        n_blocks = len(spectra) - 1  # last STFT frame flushes the analysis tail
-        output = np.zeros(n_blocks * hop + self.taps - 1, dtype=np.float64)
-        input_blocks = np.pad(np.asarray(audio, dtype=np.float64),
-                              (0, n_blocks * hop - len(audio)))
-        fft_size = 1 << (hop + self.taps - 2).bit_length()
         responses, coefficients_by_frame, psds = [], [], []
-        for m, spectrum in enumerate(spectra):
+        for spectrum in spectra:
             psd = estimator.update(np.abs(spectrum) ** 2)
             psds.append(psd)
             target = spectral_subtraction_gain(spectrum, psd, self.oversubtraction, self.config)
             coefficients = symmetric_fir_from_gain(target, self.taps, self.config.n_fft)
             coefficients_by_frame.append(coefficients)
             responses.append(np.abs(np.fft.rfft(coefficients, n=self.config.n_fft)))
-            if m < n_blocks:
-                block = input_blocks[m * hop:(m + 1) * hop]
-                convolution = np.fft.irfft(
-                    np.fft.rfft(block, n=fft_size) * np.fft.rfft(coefficients, n=fft_size), n=fft_size,
-                )[:hop + self.taps - 1]
-                output[m * hop:m * hop + len(convolution)] += convolution
-        result = EnhancementResult(output[:len(audio)].astype(np.float32), np.asarray(responses),
-                                   np.asarray(psds), fir_coefficients=np.asarray(coefficients_by_frame))
+        coefficients_array = np.asarray(coefficients_by_frame)
+        output = overlap_add_fir_blocks(audio, coefficients_array, hop)
+        result = EnhancementResult(output, np.asarray(responses),
+                                   np.asarray(psds), fir_coefficients=coefficients_array)
         return finish_result(result, len(audio), self.config, start)
 
 

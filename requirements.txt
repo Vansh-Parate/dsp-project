@@ -2,3 +2,5 @@ numpy>=1.23
 scipy>=1.9
 soundfile>=0.11
 torch>=2.0
+pystoi>=0.3.3
+pesq>=0.0.4

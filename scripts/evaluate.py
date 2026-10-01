@@ -12,6 +12,7 @@ from uahsn.config import Config
 from uahsn.inference import UAHSNEnhancer
 from uahsn.metrics import evaluate_pair
 from uahsn.operator_metrics import operator_metrics
+from uahsn.statistics import summarize_results
 from uahsn.train import read_manifest
 
 
@@ -19,6 +20,9 @@ def evaluate(
     manifest: Path, checkpoint: Path, output_dir: Path,
     oversubtraction: float = 1.0, linear_phase_taps: int = 63,
     linear_phase_frame_length: int = 320,
+    noise_only_threshold_dbfs: float = -40.0, rpd_theta_db: float = 6.0,
+    alias_central_radius: int = 31, bootstrap_samples: int = 2000,
+    seed: int = 0,
 ) -> list[dict[str, object]]:
     linear_config = Config(win_length=linear_phase_frame_length,
                            hop_length=linear_phase_frame_length // 2)
@@ -45,8 +49,12 @@ def evaluate(
             if result.fir_coefficients is not None:
                 arrays["fir_coefficients"] = result.fir_coefficients
             np.savez_compressed(prefix.with_suffix(".npz"), **arrays)
-            record = {"item": index, "method": method.name,
-                      **evaluate_pair(clean, result.audio), **operator_metrics(result),
+            record = {"item": index, "mixture_id": row.get("mixture_id", str(index)),
+                      "method": method.name,
+                      **evaluate_pair(clean, result.audio),
+                      **operator_metrics(result, clean, noisy, method.config,
+                                         noise_only_threshold_dbfs, rpd_theta_db,
+                                         alias_central_radius),
                       "runtime_seconds": result.runtime_seconds,
                       "real_time_factor": result.real_time_factor}
             if method.name == "reconstructed_linear_phase_baseline":
@@ -55,7 +63,10 @@ def evaluate(
                                "oversubtraction": oversubtraction})
             records.append(record)
     with (output_dir / "metrics.json").open("w", encoding="utf-8") as handle:
-        json.dump(records, handle, indent=2)
+        json.dump(records, handle, indent=2, allow_nan=False)
+    with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
+        json.dump(summarize_results(records, seed, bootstrap_samples), handle, indent=2,
+                  allow_nan=False)
     return records
 
 
@@ -67,10 +78,17 @@ def main() -> None:
     parser.add_argument("--oversubtraction", type=float, default=1.0)
     parser.add_argument("--linear-phase-filter-length", type=int, default=63)
     parser.add_argument("--linear-phase-frame-length", type=int, choices=(256, 320, 512), default=320)
+    parser.add_argument("--noise-only-threshold-dbfs", type=float, default=-40.0)
+    parser.add_argument("--rpd-theta-db", type=float, default=6.0)
+    parser.add_argument("--alias-central-radius", type=int, default=31)
+    parser.add_argument("--bootstrap-samples", type=int, default=2000)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     records = evaluate(args.manifest, args.checkpoint, args.output_dir,
                        args.oversubtraction, args.linear_phase_filter_length,
-                       args.linear_phase_frame_length)
+                       args.linear_phase_frame_length, args.noise_only_threshold_dbfs,
+                       args.rpd_theta_db, args.alias_central_radius,
+                       args.bootstrap_samples, args.seed)
     print(f"Saved {len(records)} method outputs to {args.output_dir}")
 
 
