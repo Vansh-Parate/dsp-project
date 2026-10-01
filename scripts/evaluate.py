@@ -21,8 +21,8 @@ def evaluate(manifest: Path, checkpoint: Path, output_dir: Path) -> list[dict[st
     output_dir.mkdir(parents=True, exist_ok=True)
     records = []
     for index, row in enumerate(read_manifest(manifest)):
-        clean = load_audio(row["clean"])
-        noisy = load_audio(row["noisy"])
+        clean = load_audio(row.get("clean_path", row.get("clean", "")))
+        noisy = load_audio(row.get("mixture_path") or row.get("noisy", ""))
         for method in methods:
             result = method.enhance(noisy)
             prefix = output_dir / f"{index:05d}_{method.name}"

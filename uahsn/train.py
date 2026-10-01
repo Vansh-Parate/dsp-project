@@ -1,13 +1,14 @@
 """Utterance-level training with deterministic ordering and validation sigma0."""
 
 import json
+import csv
 import random
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from .audio import load_audio
+from .audio import load_audio, mix_components, random_noise_segment
 from .bands import Bands
 from .config import Config
 from .features import extract_features
@@ -24,16 +25,33 @@ def set_seed(seed: int) -> None:
 
 
 def read_manifest(path: str | Path) -> list[dict[str, str]]:
-    with open(path, encoding="utf-8") as handle:
-        rows = [json.loads(line) for line in handle if line.strip()]
-    if not rows or any("clean" not in row or "noisy" not in row for row in rows):
-        raise ValueError("Manifest needs at least one JSON line with clean and noisy paths")
+    with open(path, newline="", encoding="utf-8") as handle:
+        if Path(path).suffix.lower() == ".csv":
+            rows = list(csv.DictReader(handle))
+        else:
+            rows = [json.loads(line) for line in handle if line.strip()]
+    if not rows or any(not (("clean_path" in row and "noise_path" in row) or
+                            ("clean" in row and "noisy" in row)) for row in rows):
+        raise ValueError("Manifest needs clean/noise paths or legacy clean/noisy paths")
     return rows
 
 
-def make_example(row: dict[str, str], config: Config, bands: Bands) -> tuple[torch.Tensor, ...]:
-    clean = load_audio(row["clean"], config.sample_rate)
-    noisy = load_audio(row["noisy"], config.sample_rate)
+def make_example(
+    row: dict[str, str], config: Config, bands: Bands,
+    rng: np.random.Generator | None = None,
+) -> tuple[torch.Tensor, ...]:
+    clean = load_audio(row.get("clean_path", row.get("clean", "")), config.sample_rate)
+    if row.get("mixture_path"):
+        noisy = load_audio(row["mixture_path"], config.sample_rate)
+    elif row.get("split") == "train":
+        if rng is None:
+            raise ValueError("Dynamic training mixtures require a seeded random generator")
+        noise = load_audio(row["noise_path"], config.sample_rate)
+        segment = random_noise_segment(noise, len(clean), rng)
+        snr_db = float(rng.uniform(-5, 20))
+        clean, _, noisy = mix_components(clean, segment, snr_db)
+    else:
+        noisy = load_audio(row["noisy"], config.sample_rate)
     if len(clean) != len(noisy):
         raise ValueError("Clean and noisy pair lengths differ")
     clean_spec = stft(clean, config)
@@ -68,6 +86,7 @@ def train_model(
     config: Config = Config(),
 ) -> dict[str, float]:
     set_seed(config.seed)
+    rng = np.random.default_rng(config.seed)
     train_rows = read_manifest(train_manifest)
     validation_rows = read_manifest(validation_manifest)
     bands = Bands(config)
@@ -78,8 +97,8 @@ def train_model(
     for epoch in range(epochs):
         model.train()
         losses = []
-        for index in np.random.permutation(len(train_rows)):
-            features, target, noisy_mag, clean_mag = make_example(train_rows[index], config, bands)
+        for index in rng.permutation(len(train_rows)):
+            features, target, noisy_mag, clean_mag = make_example(train_rows[index], config, bands, rng)
             optimizer.zero_grad()
             gain, log_variance, _ = model(features)
             loss, _ = enhancement_loss(gain, log_variance, target, noisy_mag, clean_mag, weights, config)

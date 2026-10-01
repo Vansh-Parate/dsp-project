@@ -24,12 +24,14 @@ python -m scripts.run_experiments --synthetic-smoke
 
 The smoke test generates sine waves plus seeded white noise and writes audio and `.npz` gain arrays under `results/synthetic_smoke`. Its UA-HSN network is **untrained**, so the files validate execution only and are not research results.
 
-For paired WAV data, prepare deterministic mixtures, train, and evaluate:
+For clean speech and noise WAV folders, prepare deterministic evaluation mixtures, train with dynamic SNRs, and evaluate:
 
 ```bash
-python -m scripts.prepare_dataset --clean-dir data/clean --noise-dir data/noise --output-dir data/prepared
-python -m scripts.train_model --train-manifest data/prepared/train.jsonl --validation-manifest data/prepared/validation.jsonl --epochs 1 --checkpoint checkpoints/uahsn.pt
-python -m scripts.evaluate --manifest data/prepared/validation.jsonl --checkpoint checkpoints/uahsn.pt --output-dir results/evaluation
+python -m scripts.prepare_dataset --clean-dir data/clean --noise-dir data/noise --output-dir data/prepared --seed 0
+python -m scripts.train_model --train-manifest data/prepared/train.csv --validation-manifest data/prepared/validation.csv --epochs 1 --seed 0 --checkpoint checkpoints/uahsn.pt
+python -m scripts.evaluate --manifest data/prepared/test.csv --checkpoint checkpoints/uahsn.pt --output-dir results/evaluation
 ```
 
 Evaluation saves each method's enhanced `.wav`, `.npz` gain arrays, and `metrics.json` containing SI-SDR, log-spectral distance, operator measures, and wall-clock real-time factor. These are measurement implementations, not claims of quality. A trained checkpoint requires real paired data; no dataset is bundled or downloaded.
+
+`prepare_dataset` accepts stereo or mono input and resamples it to 16 kHz mono, writing float WAV files to avoid quantization changing the requested SNR. It reports and skips unreadable or silent files. Clean speech is split by speaker: the first subdirectory is treated as the speaker ID; flat names such as `p225_001.wav` use the prefix. For other layouts, pass `--speaker-regex '(?P<speaker>...)'` against the relative clean path. At least three distinct speaker groups are required. The CSV fields are `mixture_id,clean_path,noise_path,mixture_path,speaker,noise_type,snr_db,split,seed`. Training rows leave `mixture_path` and `snr_db` empty; each training epoch draws a new noise excerpt and a uniform SNR in `[-5, 20]` dB. Validation and test rows contain fixed mixtures at −5, 0, 5, 10, and 15 dB. For each mixture, power-based SNR scaling is applied exactly, then a single shared scale is applied to clean speech, scaled noise, and mixture if needed to prevent clipping.
