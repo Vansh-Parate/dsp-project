@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from uahsn.bands import Bands
-from uahsn.baselines import Noisy, SpectralSubtraction, DecisionDirectedWiener, LinearPhaseSpectralSubtraction
+from uahsn.baselines import Noisy, SpectralSubtraction, DecisionDirectedWiener, ReconstructedLinearPhaseBaseline
 from uahsn.config import Config
 from uahsn.features import extract_features
 from uahsn.inference import UAHSNEnhancer
@@ -54,14 +54,17 @@ class TestCore(unittest.TestCase):
         self.assertEqual(extract_features(spectra).shape, (6, 96))
         torch.manual_seed(0)
         methods = [Noisy(), SpectralSubtraction(), DecisionDirectedWiener(),
-                   LinearPhaseSpectralSubtraction(), UAHSNEnhancer(UAHSN(), 1.0)]
+                   ReconstructedLinearPhaseBaseline(), UAHSNEnhancer(UAHSN(), 1.0)]
         for method in methods:
             with self.subTest(method=method.name):
                 result = method.enhance(audio)
                 self.assertEqual(result.audio.shape, audio.shape)
                 self.assertEqual(result.gains.shape, (6, 257))
+                self.assertEqual(result.noise_psd.shape, (6, 257))
                 self.assertTrue(np.isfinite(result.audio).all())
                 self.assertTrue(np.isfinite(result.gains).all())
+                self.assertTrue(np.isfinite(result.noise_psd).all())
+                self.assertGreater(result.runtime_seconds, 0)
         result = methods[-1].enhance(audio)
         self.assertEqual(result.band_gains.shape, (6, 32))
         self.assertEqual(result.standard_deviation.shape, (6, 32))
